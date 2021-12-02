@@ -14,6 +14,7 @@ import java.util.Arrays;
 import java.io.IOException;
 import java.util.Map;
 import java.util.TreeMap;
+import java.util.*;
 import java.util.StringTokenizer;
 
 
@@ -25,6 +26,12 @@ public class HW5
 
         private Text word = new Text();
 
+        private int n;
+
+        private HashMap<String, Integer> topNCount;
+
+        private TreeMap<Integer, String> wordList;
+        
         /*
          List of stop words. Stored in a hash set for fast lookups. I could have read these in via a text file but thought it would be
          better to have everything in one java file. List taken from https://www.ranks.nl/stopwords
@@ -46,6 +53,14 @@ public class HW5
         "why", "why's", "with", "won't", "would", "wouldn't", "you", "you'd", "you'll", "you're",
         "you've", "your", "yours", "yourself", "yourselves"));
 
+        public void setup(Context context)
+        {
+            // Get value of n from configuration and initialize a hashmap to store the top n counts
+            n = Integer.parseInt(context.getConfiguration().get("N"));
+            topNCount = new HashMap<String, Integer>();
+            wordList = new TreeMap<Integer, String>();
+        }
+
         public void map(Object key, Text value, Context context) throws IOException, InterruptedException
         {
             String valueString = value.toString();
@@ -62,63 +77,35 @@ public class HW5
                 // Make sure string isn't empty or in the stop list before counting it
                 if(word.toString() != "" && !word.toString().isEmpty() && !stopWords.contains(word.toString()))
                 {
-                    // Write word with its associated file to the reducer
-                    context.write(word, one);
+                    // Increment dictionary value if it exists. If not add the word to the dict
+                    if (topNCount.containsKey(word.toString())) 
+                    {
+                        topNCount.put(word.toString(), topNCount.get(word.toString()) + 1);
+                    } 
+                    else 
+                    {
+                        topNCount.put(word.toString(), 1);
+                    }
                 }
-            }
-        }
-    }
-    
-    public static class WordCountReducer extends Reducer<Text, IntWritable, Text, IntWritable>
-    {
-        private IntWritable wordcount = new IntWritable();
-
-        public void reduce(Text key, Iterable<IntWritable> values, Context context) throws IOException, InterruptedException
-        {
-            int total = 0;
-
-            // Sum up values for each word
-            for(IntWritable value : values)
-            {
-                total += value.get();
-            }
-
-            wordcount.set(total);
-
-            context.write(key, wordcount);
-        }
-    }
-
-
-    public static class TopNMapper extends Mapper<Object, Text, Text, IntWritable>
-    {
-        private int n;
-        private TreeMap<Integer, String> wordList;
-
-        public void setup(Context context)
-        {
-            // Get value of n from configuration and initialize a treemap to store the top n words for the mapper
-            n = Integer.parseInt(context.getConfiguration().get("N"));
-            wordList = new TreeMap<Integer, String>();
-        }
-
-        public void map(Object key, Text value, Context context)
-        {
-            // Split word and wordcount
-            String[] line = value.toString().split("\t");
-
-            // add each word and its count to the treemap
-            wordList.put(Integer.valueOf(line[1]), line[0]);
-
-            // if the tree map is full, remove the first key which is the smallest count
-            if (wordList.size() > n)
-            {
-                wordList.remove(wordList.firstKey());
             }
         }
 
         public void cleanup(Context context) throws IOException, InterruptedException
         {
+            
+            // Get top 5 entries in the hashmap
+            for (String key : topNCount.keySet())
+            {
+                // add each word and its count to the treemap
+                wordList.put(Integer.valueOf(topNCount.get(key)), key);
+
+                // if the tree map is full, remove the first key which is the smallest count
+                if (wordList.size() > n)
+                {
+                    wordList.remove(wordList.firstKey());
+                }
+            }
+
             // Swap keys before writing, so format will be word, count
             for (Map.Entry<Integer, String> entry : wordList.entrySet())
             {
@@ -126,11 +113,8 @@ public class HW5
             }
         }
     }
-
-    /* input:  <word, wordcount> (with the local topN words)
-     * output: <wordcount, word> (with the global topN words)
-     */
-    public static class TopNReducer extends Reducer<Text, IntWritable, IntWritable, Text>
+    
+    public static class WordCountReducer extends Reducer<Text, IntWritable, IntWritable, Text>
     {
         private int n;
         private TreeMap<Integer, String> wordList;
@@ -172,14 +156,11 @@ public class HW5
         }
     }
 
-
     public static void main(String[] args) throws Exception
     {
         // Create config and set a public variable for n to be 5
         Configuration config = new Configuration();
         config.set("N", "5");
-        // Establis path for output of wordcount job and input of top n job
-        Path wordcountOutput = new Path("wordcountOutput");
 
         // Create and start wordcount job
         Job wordCountJob = Job.getInstance(config, "WordCount");
@@ -188,25 +169,11 @@ public class HW5
         wordCountJob.setReducerClass(WordCountReducer.class);
         wordCountJob.setMapOutputKeyClass(Text.class);
         wordCountJob.setMapOutputValueClass(IntWritable.class);
-        wordCountJob.setOutputKeyClass(Text.class);
-        wordCountJob.setOutputValueClass(IntWritable.class);
+        wordCountJob.setOutputKeyClass(IntWritable.class);
+        wordCountJob.setOutputValueClass(Text.class);
+        wordCountJob.setNumReduceTasks(1);
         FileInputFormat.addInputPath(wordCountJob, new Path(args[0]));
-        FileOutputFormat.setOutputPath(wordCountJob, wordcountOutput);
-        wordCountJob.waitForCompletion(true);
-        
-        // Create and start top n job
-        Path output = new Path(args[1]);
-        Job topNJob = Job.getInstance(config, "TopN");
-        topNJob.setJarByClass(HW5.class);
-        topNJob.setMapperClass(TopNMapper.class);
-        topNJob.setReducerClass(TopNReducer.class);
-        topNJob.setMapOutputKeyClass(Text.class);
-        topNJob.setMapOutputValueClass(IntWritable.class);
-        topNJob.setOutputKeyClass(IntWritable.class);
-        topNJob.setOutputValueClass(Text.class);
-        topNJob.setNumReduceTasks(1);
-        FileInputFormat.addInputPath(topNJob, wordcountOutput);
-        FileOutputFormat.setOutputPath(topNJob, output);
-        topNJob.waitForCompletion(true);
+        FileOutputFormat.setOutputPath(wordCountJob, new Path(args[1]));
+        System.exit(wordCountJob.waitForCompletion(true) ? 0 : 1);
     }
 }
