@@ -1,5 +1,5 @@
-5740	thou
-5778	man
-8267	will
-8495	said
-9211	one
+1235    jean
+1333    now
+1372    marius
+1517    levin
+1796    said
